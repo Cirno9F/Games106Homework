@@ -15,7 +15,7 @@ layout (set = 0, binding = 0) uniform UBOScene
 	vec4 viewPos;
 } uboScene;
 
-layout(std430, set = 2, binding = 0) readonly buffer JointMatrices {
+layout(std430, set = 7, binding = 0) readonly buffer JointMatrices {
 	mat4 jointMatrices[];
 };
 

@@ -105,6 +105,17 @@ public:
 	struct Material {
 		glm::vec4 baseColorFactor = glm::vec4(1.0f);
 		uint32_t baseColorTextureIndex;
+		float metallicFactor;
+		uint32_t metallicRoughnessTextureIndex;
+		float roughnessFactor;
+
+		int32_t normalTextureIndex = -1;
+		int32_t emissiveTextureIndex = -1;
+		int32_t occlusionTextureIndex = -1;
+
+		bool hasNormalTex() { return normalTextureIndex >= 0; }
+		bool hasEmissiveTex() { return emissiveTextureIndex >= 0; }
+		bool hasOcclusionTex() { return occlusionTextureIndex >= 0; }
 	};
 
 	// Contains the texture for a single glTF image
@@ -112,7 +123,7 @@ public:
 	struct Image {
 		vks::Texture2D texture;
 		// We also store (and create) a descriptor set that's used to access this texture from the fragment shader
-		VkDescriptorSet descriptorSet;
+		VkDescriptorSet descriptorSet = nullptr;
 	};
 
 	// A glTF texture stores a reference to the image and a sampler
@@ -172,6 +183,8 @@ public:
 	std::vector<Animation> animations;
 
 	uint32_t activeAnimation = 0;
+	int32_t whiteImageIndex = 0;
+	int32_t blackImageIndex = 0;
 
 	~VulkanglTFModel()
 	{
@@ -231,6 +244,30 @@ public:
 				delete[] buffer;
 			}
 		}
+
+		unsigned char* buffer = nullptr;
+		VkDeviceSize bufferSize = 1 * 1 * 4;
+		buffer = new unsigned char[bufferSize];
+
+		Image black;
+		buffer[0] = 0;
+		buffer[1] = 0;
+		buffer[2] = 0;
+		buffer[3] = 0;
+		black.texture.fromBuffer(buffer, bufferSize, VK_FORMAT_R8G8B8A8_UNORM, 1, 1, vulkanDevice, copyQueue);
+		blackImageIndex = input.images.size();
+		images.emplace_back(black);
+
+		Image white;
+		buffer[0] = 255;
+		buffer[1] = 255;
+		buffer[2] = 255;
+		buffer[3] = 255;
+		white.texture.fromBuffer(buffer, bufferSize, VK_FORMAT_R8G8B8A8_UNORM, 1, 1, vulkanDevice, copyQueue);
+		whiteImageIndex = input.images.size();
+		images.emplace_back(white);
+
+		delete[] buffer;
 	}
 
 	void loadTextures(tinygltf::Model& input)
@@ -254,6 +291,20 @@ public:
 			// Get base color texture index
 			if (glTFMaterial.values.find("baseColorTexture") != glTFMaterial.values.end()) {
 				materials[i].baseColorTextureIndex = glTFMaterial.values["baseColorTexture"].TextureIndex();
+			}
+
+			materials[i].normalTextureIndex = glTFMaterial.normalTexture.index;
+			materials[i].emissiveTextureIndex = glTFMaterial.emissiveTexture.index;
+			materials[i].occlusionTextureIndex = glTFMaterial.occlusionTexture.index;
+
+			if (glTFMaterial.values.find("metallicFactor") != glTFMaterial.values.end()) {
+				materials[i].metallicFactor = static_cast<float>(glTFMaterial.values["metallicFactor"].Factor());
+			}
+			if (glTFMaterial.values.find("metallicRoughnessTexture") != glTFMaterial.values.end()) {
+				materials[i].metallicRoughnessTextureIndex = glTFMaterial.values["metallicRoughnessTexture"].TextureIndex();
+			}
+			if (glTFMaterial.values.find("roughnessFactor") != glTFMaterial.values.end()) {
+				materials[i].roughnessFactor = static_cast<float>(glTFMaterial.values["metallicFactor"].Factor());
 			}
 		}
 	}
@@ -701,9 +752,30 @@ public:
 			for (VulkanglTFModel::Primitive& primitive : node->mesh.primitives) {
 				if (primitive.indexCount > 0) {
 					// Get the texture index for this primitive
-					VulkanglTFModel::Texture texture = textures[materials[primitive.materialIndex].baseColorTextureIndex];
+
+					Material mat = materials[primitive.materialIndex];
+
+					VulkanglTFModel::Texture texture = textures[mat.baseColorTextureIndex];
+					VulkanglTFModel::Texture normalTex = textures[mat.normalTextureIndex];
+					VulkanglTFModel::Texture occlusionTex = mat.hasOcclusionTex() ? textures[mat.occlusionTextureIndex] : Texture{whiteImageIndex};
+					VulkanglTFModel::Texture emissionTex = mat.hasEmissiveTex() ? textures[mat.emissiveTextureIndex] : Texture{blackImageIndex};
+					VulkanglTFModel::Texture roughnessMetallicTex = textures[mat.metallicRoughnessTextureIndex];
 					// Bind the descriptor for the current primitive's texture
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &images[texture.imageIndex].descriptorSet, 0, nullptr);
+					std::vector<VkDescriptorSet> imageSets = {
+						images[texture.imageIndex].descriptorSet,
+						images[normalTex.imageIndex].descriptorSet,
+						images[occlusionTex.imageIndex].descriptorSet,
+						images[emissionTex.imageIndex].descriptorSet,
+						images[roughnessMetallicTex.imageIndex].descriptorSet
+					};
+					vkCmdBindDescriptorSets(commandBuffer, 
+						VK_PIPELINE_BIND_POINT_GRAPHICS, 
+						pipelineLayout, 
+						1, 
+						imageSets.size(),
+						imageSets.data(),
+						0, 
+						nullptr);
 					vkCmdDrawIndexed(commandBuffer, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
 				}
 			}
@@ -756,12 +828,17 @@ public:
 	struct DescriptorSetLayouts {
 		VkDescriptorSetLayout matrices;
 		VkDescriptorSetLayout textures;
+		VkDescriptorSetLayout normalTextures;
+		VkDescriptorSetLayout occlusionTextures;
+		VkDescriptorSetLayout emissionTextures;
+		VkDescriptorSetLayout roughnessMetallicTexture;
 		VkDescriptorSetLayout jointMatrices;
 	} descriptorSetLayouts;
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "homework1";
+		settings.validation = true;
 		camera.type = Camera::CameraType::lookat;
 		camera.flipY = true;
 		camera.setPosition(glm::vec3(0.0f, -0.1f, -1.0f));
@@ -981,14 +1058,32 @@ public:
 		// Descriptor set layout for passing material textures
 		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.textures));
+		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.normalTextures));
+		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.occlusionTextures));
+		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.emissionTextures));
+		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.roughnessMetallicTexture));
 
 		// Descriptor set layout for passing skin joint matrices
+		descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(&setLayoutBinding, 1);
 		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.jointMatrices));
 
 
 		// Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
-		std::array<VkDescriptorSetLayout, 3> setLayouts = { descriptorSetLayouts.matrices, descriptorSetLayouts.textures, descriptorSetLayouts.jointMatrices };
+		std::array<VkDescriptorSetLayout, 7> setLayouts = 
+		{ 
+			descriptorSetLayouts.matrices, 
+			descriptorSetLayouts.textures, 
+			descriptorSetLayouts.normalTextures,
+			descriptorSetLayouts.occlusionTextures,
+			descriptorSetLayouts.emissionTextures,
+			descriptorSetLayouts.roughnessMetallicTexture,
+			descriptorSetLayouts.jointMatrices 
+		};
 		VkPipelineLayoutCreateInfo pipelineLayoutCI= vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
 		// We will use push constants to push the local matrices of a primitive to the vertex shader
 		VkPushConstantRange pushConstantRange = vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::mat4), 0);
@@ -1002,6 +1097,7 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
 		VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &shaderData.buffer.descriptor);
 		vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
+
 		// Descriptor sets for materials
 		for (auto& image : glTFModel.images) {
 			const VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.textures, 1);
