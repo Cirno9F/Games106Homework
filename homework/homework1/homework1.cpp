@@ -38,6 +38,24 @@ public:
 	vks::VulkanDevice* vulkanDevice;
 	VkQueue copyQueue;
 
+	// Framebuffer for offscreen rendering
+	struct FrameBufferAttachment {
+		VkImage image;
+		VkDeviceMemory mem;
+		VkImageView view;
+	};
+	struct FrameBuffer {
+		VkFramebuffer framebuffer;
+		FrameBufferAttachment color, depth;
+		VkDescriptorImageInfo descriptor;
+	};
+	struct OffscreenPass {
+		int32_t width, height;
+		//VkRenderPass renderPass;
+		VkSampler sampler;
+		std::array<FrameBuffer, 1> framebuffers;
+	} offscreenPass;
+
 	// The vertex layout for the samples' model
 	struct Vertex {
 		glm::vec3 pos;
@@ -744,7 +762,7 @@ public:
 		glTF rendering functions
 	*/
 
-	// Draw a single node including child nodes (if present)
+	// Draw a single node including child nodes (if present)s
 	void drawNode(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, VulkanglTFModel::Node* node)
 	{
 		if (node->mesh.primitives.size() > 0) {
@@ -829,11 +847,14 @@ public:
 
 	struct Pipelines {
 		VkPipeline solid;
+		VkPipeline postprocess;
 		VkPipeline wireframe = VK_NULL_HANDLE;
 	} pipelines;
 
 	VkPipelineLayout pipelineLayout;
+	VkPipelineLayout postprocessPipelineLayout;
 	VkDescriptorSet descriptorSet;
+	VkDescriptorSet postprocessDescriptorSet;
 
 	struct DescriptorSetLayouts {
 		VkDescriptorSetLayout matrices;
@@ -843,12 +864,13 @@ public:
 		VkDescriptorSetLayout emissionTextures;
 		VkDescriptorSetLayout roughnessMetallicTexture;
 		VkDescriptorSetLayout jointMatrices;
+		VkDescriptorSetLayout postprocess;
 	} descriptorSetLayouts;
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "homework1";
-		settings.validation = true;
+		//settings.validation = true;
 		camera.type = Camera::CameraType::lookat;
 		camera.flipY = true;
 		camera.setPosition(glm::vec3(0.0f, -0.1f, -1.0f));
@@ -886,8 +908,7 @@ public:
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
 		VkClearValue clearValues[2];
-		clearValues[0].color = defaultClearColor;
-		clearValues[0].color = { { 0.25f, 0.25f, 0.25f, 1.0f } };;
+		clearValues[0].color = { { 0.25f, 0.25f, 0.25f, 1.0f } };
 		clearValues[1].depthStencil = { 1.0f, 0 };
 
 		VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
@@ -904,17 +925,28 @@ public:
 
 		for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
 		{
-			renderPassBeginInfo.framebuffer = frameBuffers[i];
 			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
+						
+			renderPassBeginInfo.framebuffer = glTFModel.offscreenPass.framebuffers[0].framebuffer;
 			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-			// Bind scene matrices descriptor to set 0
 			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
 			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe ? pipelines.wireframe : pipelines.solid);
-			glTFModel.draw(drawCmdBuffers[i], pipelineLayout);
+			glTFModel.draw(drawCmdBuffers[i], pipelineLayout);			
+			vkCmdEndRenderPass(drawCmdBuffers[i]);
+
+			//postprocess
+			renderPassBeginInfo.framebuffer = frameBuffers[i];
+			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, postprocessPipelineLayout, 0, 1, &postprocessDescriptorSet, 0, nullptr);
+			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.postprocess);
+			vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 			drawUI(drawCmdBuffers[i]);
 			vkCmdEndRenderPass(drawCmdBuffers[i]);
+
 			VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
 		}
 	}
@@ -1050,10 +1082,10 @@ public:
 		std::vector<VkDescriptorPoolSize> poolSizes = {
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
 			// One combined image sampler per model image/texture
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(glTFModel.images.size())),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<uint32_t>(glTFModel.images.size()) + 1),
 		};
 		// One set for matrices and one per model image/texture
-		const uint32_t maxSetCount = static_cast<uint32_t>(glTFModel.images.size()) + 1;
+		const uint32_t maxSetCount = static_cast<uint32_t>(glTFModel.images.size()) + 2;
 		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, maxSetCount);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 
@@ -1102,6 +1134,19 @@ public:
 		pipelineLayoutCI.pPushConstantRanges = &pushConstantRange;
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCI, nullptr, &pipelineLayout));
 
+
+		//postprocess pipeline layout
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0)	// Binding 1: Fragment shader image sampler
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings.data(), static_cast<uint32_t>(setLayoutBindings.size()));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayouts.postprocess));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayouts.postprocess, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &postprocessPipelineLayout));
+
+
+
+
 		// Descriptor set for scene matrices
 		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.matrices, 1);
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
@@ -1124,6 +1169,14 @@ public:
 			VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(skin.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &skin.ssbo.descriptor);
 			vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
 		}
+
+		// PostProcess Descriptor Set
+		VkDescriptorSetAllocateInfo descriptorSetAllocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.postprocess, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &descriptorSetAllocInfo, &postprocessDescriptorSet));
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(postprocessDescriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &glTFModel.offscreenPass.framebuffers[0].descriptor),	// Binding 1: Fragment shader texture sampler
+		};
+		vkUpdateDescriptorSets(device, writeDescriptorSets.size(), writeDescriptorSets.data(), 0, NULL);
 	}
 
 	void preparePipelines()
@@ -1137,7 +1190,34 @@ public:
 		VkPipelineMultisampleStateCreateInfo multisampleStateCI = vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
 		const std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 		VkPipelineDynamicStateCreateInfo dynamicStateCI = vks::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables.data(), static_cast<uint32_t>(dynamicStateEnables.size()), 0);
-		// Vertex input bindings and attributes
+		
+		//postprocess
+		{
+			std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
+			shaderStages[0] = loadShader(getHomeworkShadersPath() + "homework1/postprocess.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+			shaderStages[1] = loadShader(getHomeworkShadersPath() + "homework1/postprocess.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+			
+			rasterizationStateCI.cullMode = VK_CULL_MODE_NONE;
+			VkGraphicsPipelineCreateInfo pppipelineCI = vks::initializers::pipelineCreateInfo(postprocessPipelineLayout, renderPass, 0);
+			pppipelineCI.pInputAssemblyState = &inputAssemblyStateCI;
+			pppipelineCI.pRasterizationState = &rasterizationStateCI;
+			pppipelineCI.pColorBlendState = &colorBlendStateCI;
+			pppipelineCI.pMultisampleState = &multisampleStateCI;
+			pppipelineCI.pViewportState = &viewportStateCI;
+			pppipelineCI.pDepthStencilState = &depthStencilStateCI;
+			pppipelineCI.pDynamicState = &dynamicStateCI;
+			pppipelineCI.stageCount = shaderStages.size();
+			pppipelineCI.pStages = shaderStages.data();
+
+			// Empty vertex input state
+			VkPipelineVertexInputStateCreateInfo emptyInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
+
+			pppipelineCI.pVertexInputState = &emptyInputState;
+
+			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, nullptr, 1, &pppipelineCI, nullptr, &pipelines.postprocess));
+		}
+			
+		
 		const std::vector<VkVertexInputBindingDescription> vertexInputBindings = {
 			vks::initializers::vertexInputBindingDescription(0, sizeof(VulkanglTFModel::Vertex), VK_VERTEX_INPUT_RATE_VERTEX),
 		};
@@ -1161,6 +1241,7 @@ public:
 			loadShader(getHomeworkShadersPath() + "homework1/mesh.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT)
 		};
 
+		rasterizationStateCI.cullMode = VK_CULL_MODE_BACK_BIT;
 		VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo(pipelineLayout, renderPass, 0);
 		pipelineCI.pVertexInputState = &vertexInputStateCI;
 		pipelineCI.pInputAssemblyState = &inputAssemblyStateCI;
@@ -1182,6 +1263,192 @@ public:
 			rasterizationStateCI.lineWidth = 1.0f;
 			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCI, nullptr, &pipelines.wireframe));
 		}
+	}
+
+	// Offscreen frame buffer properties
+#define FB_COLOR_FORMAT VK_FORMAT_R8G8B8A8_UNORM
+
+	// Setup the offscreen framebuffer for rendering the mirrored scene
+	// The color attachment of this framebuffer will then be sampled from
+	void prepareOffscreenFramebuffer(VulkanglTFModel::FrameBuffer& frameBuf, VkFormat colorFormat, VkFormat depthFormat)
+	{
+		// Color attachment
+		VkImageCreateInfo image = vks::initializers::imageCreateInfo();
+		image.imageType = VK_IMAGE_TYPE_2D;
+		image.format = colorFormat;
+		image.extent.width = width;
+		image.extent.height = height;
+		image.extent.depth = 1;
+		image.mipLevels = 1;
+		image.arrayLayers = 1;
+		image.samples = VK_SAMPLE_COUNT_1_BIT;
+		image.tiling = VK_IMAGE_TILING_OPTIMAL;
+		// We will sample directly from the color attachment
+		image.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
+		VkMemoryRequirements memReqs;
+
+		VkImageViewCreateInfo colorImageView = vks::initializers::imageViewCreateInfo();
+		colorImageView.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		colorImageView.format = colorFormat;
+		colorImageView.flags = 0;
+		colorImageView.subresourceRange = {};
+		colorImageView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		colorImageView.subresourceRange.baseMipLevel = 0;
+		colorImageView.subresourceRange.levelCount = 1;
+		colorImageView.subresourceRange.baseArrayLayer = 0;
+		colorImageView.subresourceRange.layerCount = 1;
+
+		VK_CHECK_RESULT(vkCreateImage(device, &image, nullptr, &frameBuf.color.image));
+		vkGetImageMemoryRequirements(device, frameBuf.color.image, &memReqs);
+		memAlloc.allocationSize = memReqs.size;
+		memAlloc.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &frameBuf.color.mem));
+		VK_CHECK_RESULT(vkBindImageMemory(device, frameBuf.color.image, frameBuf.color.mem, 0));
+
+		colorImageView.image = frameBuf.color.image;
+		VK_CHECK_RESULT(vkCreateImageView(device, &colorImageView, nullptr, &frameBuf.color.view));
+
+		// Depth stencil attachment
+		image.format = depthFormat;
+		image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+		VkImageViewCreateInfo depthStencilView = vks::initializers::imageViewCreateInfo();
+		depthStencilView.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		depthStencilView.format = depthFormat;
+		depthStencilView.flags = 0;
+		depthStencilView.subresourceRange = {};
+		depthStencilView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		if (vks::tools::formatHasStencil(depthFormat)) {
+			depthStencilView.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+		}
+		depthStencilView.subresourceRange.baseMipLevel = 0;
+		depthStencilView.subresourceRange.levelCount = 1;
+		depthStencilView.subresourceRange.baseArrayLayer = 0;
+		depthStencilView.subresourceRange.layerCount = 1;
+
+		VK_CHECK_RESULT(vkCreateImage(device, &image, nullptr, &frameBuf.depth.image));
+		vkGetImageMemoryRequirements(device, frameBuf.depth.image, &memReqs);
+		memAlloc.allocationSize = memReqs.size;
+		memAlloc.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &frameBuf.depth.mem));
+		VK_CHECK_RESULT(vkBindImageMemory(device, frameBuf.depth.image, frameBuf.depth.mem, 0));
+
+		depthStencilView.image = frameBuf.depth.image;
+		VK_CHECK_RESULT(vkCreateImageView(device, &depthStencilView, nullptr, &frameBuf.depth.view));
+
+		VkImageView attachments[2];
+		attachments[0] = frameBuf.color.view;
+		attachments[1] = frameBuf.depth.view;
+
+		VkFramebufferCreateInfo fbufCreateInfo = vks::initializers::framebufferCreateInfo();
+		fbufCreateInfo.renderPass = renderPass;
+		fbufCreateInfo.attachmentCount = 2;
+		fbufCreateInfo.pAttachments = attachments;
+		fbufCreateInfo.width = width;
+		fbufCreateInfo.height = height;
+		fbufCreateInfo.layers = 1;
+
+		VK_CHECK_RESULT(vkCreateFramebuffer(device, &fbufCreateInfo, nullptr, &frameBuf.framebuffer));
+
+		// Fill a descriptor for later use in a descriptor set
+		frameBuf.descriptor.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		frameBuf.descriptor.imageView = frameBuf.color.view;
+		frameBuf.descriptor.sampler = glTFModel.offscreenPass.sampler;
+	}
+
+	// Prepare the offscreen framebuffers used for the vertical- and horizontal blur
+	void prepareOffscreen()
+	{
+		glTFModel.offscreenPass.width = width;
+		glTFModel.offscreenPass.height = height;
+
+		// Find a suitable depth format
+		VkFormat fbDepthFormat;
+		VkBool32 validDepthFormat = vks::tools::getSupportedDepthFormat(physicalDevice, &fbDepthFormat);
+		assert(validDepthFormat);
+
+		//// Create a separate render pass for the offscreen rendering as it may differ from the one used for scene rendering
+
+		//std::array<VkAttachmentDescription, 2> attchmentDescriptions = {};
+		//// Color attachment
+		//attchmentDescriptions[0].format = FB_COLOR_FORMAT;
+		//attchmentDescriptions[0].samples = VK_SAMPLE_COUNT_1_BIT;
+		//attchmentDescriptions[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		//attchmentDescriptions[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		//attchmentDescriptions[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		//attchmentDescriptions[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		//attchmentDescriptions[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		//attchmentDescriptions[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		//// Depth attachment
+		//attchmentDescriptions[1].format = fbDepthFormat;
+		//attchmentDescriptions[1].samples = VK_SAMPLE_COUNT_1_BIT;
+		//attchmentDescriptions[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		//attchmentDescriptions[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		//attchmentDescriptions[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		//attchmentDescriptions[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		//attchmentDescriptions[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		//attchmentDescriptions[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		//VkAttachmentReference colorReference = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+		//VkAttachmentReference depthReference = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+
+		//VkSubpassDescription subpassDescription = {};
+		//subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		//subpassDescription.colorAttachmentCount = 1;
+		//subpassDescription.pColorAttachments = &colorReference;
+		//subpassDescription.pDepthStencilAttachment = &depthReference;
+
+		//// Use subpass dependencies for layout transitions
+		//std::array<VkSubpassDependency, 2> dependencies;
+
+		//dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		//dependencies[0].dstSubpass = 0;
+		//dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		//dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		//dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		//dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		//dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		//dependencies[1].srcSubpass = 0;
+		//dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		//dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		//dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		//dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		//dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		//dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		//// Create the actual renderpass
+		//VkRenderPassCreateInfo renderPassInfo = {};
+		//renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		//renderPassInfo.attachmentCount = static_cast<uint32_t>(attchmentDescriptions.size());
+		//renderPassInfo.pAttachments = attchmentDescriptions.data();
+		//renderPassInfo.subpassCount = 1;
+		//renderPassInfo.pSubpasses = &subpassDescription;
+		//renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+		//renderPassInfo.pDependencies = dependencies.data();
+
+		//VK_CHECK_RESULT(vkCreateRenderPass(device, &renderPassInfo, nullptr, &glTFModel.offscreenPass.renderPass));
+
+		// Create sampler to sample from the color attachments
+		VkSamplerCreateInfo sampler = vks::initializers::samplerCreateInfo();
+		sampler.magFilter = VK_FILTER_LINEAR;
+		sampler.minFilter = VK_FILTER_LINEAR;
+		sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler.addressModeV = sampler.addressModeU;
+		sampler.addressModeW = sampler.addressModeU;
+		sampler.mipLodBias = 0.0f;
+		sampler.maxAnisotropy = 1.0f;
+		sampler.minLod = 0.0f;
+		sampler.maxLod = 1.0f;
+		sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+		VK_CHECK_RESULT(vkCreateSampler(device, &sampler, nullptr, &glTFModel.offscreenPass.sampler));
+
+		// Create frame buffer
+		auto& framebuffer = glTFModel.offscreenPass.framebuffers[0];
+		prepareOffscreenFramebuffer(framebuffer, FB_COLOR_FORMAT, fbDepthFormat);
 	}
 
 	// Prepare and initialize uniform buffer containing shader uniforms
@@ -1213,6 +1480,7 @@ public:
 		VulkanExampleBase::prepare();
 		loadAssets();
 		prepareUniformBuffers();
+		prepareOffscreen();
 		setupDescriptors();
 		preparePipelines();
 		buildCommandBuffers();

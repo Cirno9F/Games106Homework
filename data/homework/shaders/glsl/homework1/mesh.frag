@@ -80,7 +80,7 @@ vec3 specularContribution(vec3 L, vec3 V, vec3 N, vec3 F0, float metallic, float
 	float dotNL = clamp(dot(N, L), 0.0, 1.0);
 
 	// Light color fixed
-	vec3 lightColor = vec3(1.0);
+	vec3 lightColor = vec3(2.0);
 
 	vec3 color = vec3(0.0);
 
@@ -115,7 +115,7 @@ void main()
 	vec3 N = calculateNormal();
 	vec3 V = normalize(inViewVec);
 	vec3 L = normalize(inLightVec);
-	vec3 R = reflect(V, N); 
+	vec3 R = reflect(-V, N); 
 
 	vec3 orm = texture(samplerRoughnessMetallicMap, inUV).rgb;
 	float metallic = orm.b;
@@ -147,13 +147,16 @@ void main()
 //		vec3 ambient = (kD * diffuse + specular) * texture(samplerOcclusionMap, inUV).rrr;
 //	}
 
-	vec3 color = Lo;
+	//暂时没有ibl贴图，写个假的
+	vec3 ambient = texture(samplerOcclusionMap, inUV).rrr * 0.02f;
 
-	// Tone mapping
-	color = Uncharted2Tonemap(color * 1.0f);
-	color = color * (1.0f / Uncharted2Tonemap(vec3(11.2f)));	
-	// Gamma correction
-	color = pow(color, vec3(1.0f / 2.2f));
+	//emission
+	vec3 emission = texture(samplerEmissionMap, inUV).rgb * 1.0f;
+
+	vec3 color = Lo + emission + ambient;
+
+	//// Gamma correction
+	//color = pow(color, vec3(1.0f / 2.2f));
 
 	outFragColor = vec4(color, 1.0);	
 }
