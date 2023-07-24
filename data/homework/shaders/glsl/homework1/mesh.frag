@@ -8,36 +8,26 @@ layout (set = 5, binding = 0) uniform sampler2D samplerRoughnessMetallicMap;
 
 
 layout (location = 0) in vec3 inNormal;
-layout (location = 1) in vec3 inTangent;
+layout (location = 1) in vec4 inTangent;
 layout (location = 2) in vec3 inColor;
 layout (location = 3) in vec2 inUV;
-layout (location = 4) in vec3 inViewVec;
-layout (location = 5) in vec3 inLightVec;
+layout (location = 4) in vec3 inCameraPos;
+layout (location = 5) in vec3 inLightPos;
+layout (location = 6) in vec3 inWorldPos;
 
 layout (location = 0) out vec4 outFragColor;
 
 #define PI 3.1415926535897932384626433832795
+//#define ALBEDO pow(texture(samplerColorMap, inUV).rgb, vec3(2.2f))
 #define ALBEDO pow(texture(samplerColorMap, inUV).rgb, vec3(2.2f))
-
-// From http://filmicgames.com/archives/75
-vec3 Uncharted2Tonemap(vec3 x)
-{
-	float A = 0.15;
-	float B = 0.50;
-	float C = 0.10;
-	float D = 0.20;
-	float E = 0.02;
-	float F = 0.30;
-	return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))-E/F;
-}
 
 // Normal Distribution function --------------------------------------
 float D_GGX(float dotNH, float roughness)
 {
-	float alpha = roughness * roughness;
-	float alpha2 = alpha * alpha;
-	float denom = dotNH * dotNH * (alpha2 - 1.0) + 1.0;
-	return (alpha2)/(PI * denom*denom); 
+	float a = roughness * roughness;
+	float a2 = a * a;
+	float denom = dotNH * dotNH * (a2 - 1.0) + 1.0;
+	return (a2)/(PI * denom * denom); 
 }
 
 // Geometric Shadowing function --------------------------------------
@@ -55,10 +45,11 @@ vec3 F_Schlick(float cosTheta, vec3 F0)
 {
 	return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
-vec3 F_SchlickR(float cosTheta, vec3 F0, float roughness)
-{
-	return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
-}
+
+//vec3 F_SchlickR(float cosTheta, vec3 F0, float roughness)
+//{
+//	return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
+//}
 
 //vec3 prefilteredReflection(vec3 R, float roughness)
 //{
@@ -75,12 +66,12 @@ vec3 specularContribution(vec3 L, vec3 V, vec3 N, vec3 F0, float metallic, float
 {
 	// Precalculate vectors and dot products	
 	vec3 H = normalize (V + L);
-	float dotNH = clamp(dot(N, H), 0.0, 1.0);
-	float dotNV = clamp(dot(N, V), 0.0, 1.0);
-	float dotNL = clamp(dot(N, L), 0.0, 1.0);
+	float dotNH = clamp(dot(N, H), 0.00001, 1.0);
+	float dotNV = clamp(dot(N, V), 0.00001, 1.0);
+	float dotNL = clamp(dot(N, L), 0.00001, 1.0);
 
 	// Light color fixed
-	vec3 lightColor = vec3(2.0);
+	vec3 lightColor = vec3(1.0);
 
 	vec3 color = vec3(0.0);
 
@@ -92,8 +83,8 @@ vec3 specularContribution(vec3 L, vec3 V, vec3 N, vec3 F0, float metallic, float
 		// F = Fresnel factor (Reflectance depending on angle of incidence)
 		vec3 F = F_Schlick(dotNV, F0);		
 		vec3 spec = D * F * G / (4.0 * dotNL * dotNV + 0.001);		
-		vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);			
-		color += (kD * ALBEDO / PI + spec) * dotNL;
+		vec3 kD = (vec3(1.0) - F) * vec3(1.0 - metallic);			
+		color = (kD * ALBEDO / PI + spec) * dotNL;
 	}
 
 	return color;
@@ -113,19 +104,19 @@ vec3 calculateNormal()
 void main() 
 {
 	vec3 N = calculateNormal();
-	vec3 V = normalize(inViewVec);
-	vec3 L = normalize(inLightVec);
+	vec3 V = normalize(inCameraPos - inWorldPos);
+	vec3 L = normalize(inLightPos);
 	vec3 R = reflect(-V, N); 
 
 	vec3 orm = texture(samplerRoughnessMetallicMap, inUV).rgb;
-	float metallic = orm.b;
-	float roughness = orm.g;
+	float occlusion = orm.x;
+	float roughness = orm.y;
+	float metallic = orm.z;
 
 	vec3 F0 = vec3(0.04); 
 	F0 = mix(F0, ALBEDO, metallic);
 
-	vec3 Lo = vec3(0.0);
-	Lo += specularContribution(L, V, N, F0, metallic, roughness); 
+	vec3 Lo = specularContribution(L, V, N, F0, metallic, roughness); 
 	
 //	//ibl
 //	{
@@ -148,15 +139,12 @@ void main()
 //	}
 
 	//暂时没有ibl贴图，写个假的
-	vec3 ambient = texture(samplerOcclusionMap, inUV).rrr * 0.02f;
+	vec3 ambient = vec3(occlusion * 0.2f);
 
 	//emission
 	vec3 emission = texture(samplerEmissionMap, inUV).rgb * 1.0f;
 
 	vec3 color = Lo + emission + ambient;
-
-	//// Gamma correction
-	//color = pow(color, vec3(1.0f / 2.2f));
 
 	outFragColor = vec4(color, 1.0);	
 }
