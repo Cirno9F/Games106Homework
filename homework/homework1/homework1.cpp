@@ -27,7 +27,7 @@
 
 #include "vulkanexamplebase.h"
 
-#define ENABLE_VALIDATION false
+#define ENABLE_VALIDATION true
 
 // Contains everything required to render a glTF model in Vulkan
 // This class is heavily simplified (compared to glTF's feature set) but retains the basic glTF structure
@@ -43,15 +43,29 @@ public:
 		VkImage image;
 		VkDeviceMemory mem;
 		VkImageView view;
+
+		void Destroy(VkDevice device)
+		{
+			vkDestroyImage(device, image, nullptr);
+			vkFreeMemory(device, mem, nullptr);
+			vkDestroyImageView(device, view, nullptr);
+		}
 	};
 	struct FrameBuffer {
 		VkFramebuffer framebuffer;
 		FrameBufferAttachment color, depth;
 		VkDescriptorImageInfo descriptor;
+
+		void Destroy(VkDevice device)
+		{
+			vkDestroyFramebuffer(device, framebuffer, nullptr);
+			color.Destroy(device);
+			depth.Destroy(device);
+		}
 	};
 	struct OffscreenPass {
 		int32_t width, height;
-		//VkRenderPass renderPass;
+		VkRenderPass renderPass;
 		VkSampler sampler;
 		std::array<FrameBuffer, 1> framebuffers;
 	} offscreenPass;
@@ -221,6 +235,10 @@ public:
 			vkDestroySampler(vulkanDevice->logicalDevice, image.texture.sampler, nullptr);
 			vkFreeMemory(vulkanDevice->logicalDevice, image.texture.deviceMemory, nullptr);
 		}
+		for (auto& frameBuffer : offscreenPass.framebuffers)
+			frameBuffer.Destroy(vulkanDevice->logicalDevice);
+		vkDestroySampler(vulkanDevice->logicalDevice, offscreenPass.sampler, nullptr);
+		vkDestroyRenderPass(vulkanDevice->logicalDevice, offscreenPass.renderPass, nullptr);
 	}
 
 	/*
@@ -839,7 +857,7 @@ public:
 		struct Values {
 			glm::mat4 projection;
 			glm::mat4 model;
-			glm::vec4 lightPos = glm::vec4(5.0f, 5.0f, -5.0f, 1.0f);
+			glm::vec4 lightPos = glm::vec4(5.0f, 5.0f, 0.0f, 1.0f);
 			glm::vec3 cameraPos;
 		} values;
 	} shaderData;
@@ -862,7 +880,7 @@ public:
 		VkDescriptorSetLayout occlusionTextures;
 		VkDescriptorSetLayout emissionTextures;
 		VkDescriptorSetLayout roughnessMetallicTexture;
-		VkDescriptorSetLayout jointMatrices;
+		//VkDescriptorSetLayout jointMatrices;
 		VkDescriptorSetLayout postprocess;
 	} descriptorSetLayouts;
 
@@ -885,11 +903,19 @@ public:
 		if (pipelines.wireframe != VK_NULL_HANDLE) {
 			vkDestroyPipeline(device, pipelines.wireframe, nullptr);
 		}
+		vkDestroyPipeline(device, pipelines.postprocess, nullptr);
 
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.matrices, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.textures, nullptr);
-		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.jointMatrices, nullptr);
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.normalTextures, nullptr);
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.occlusionTextures, nullptr);
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.emissionTextures, nullptr);
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.roughnessMetallicTexture, nullptr);
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.postprocess, nullptr);
+
+		vkDestroyPipelineLayout(device, postprocessPipelineLayout, nullptr);
+		//vkDestroyDescriptorSetLayout(device, descriptorSetLayouts.jointMatrices, nullptr);
 
 		shaderData.buffer.destroy();
 	}
@@ -927,6 +953,7 @@ public:
 			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
 						
 			renderPassBeginInfo.framebuffer = glTFModel.offscreenPass.framebuffers[0].framebuffer;
+			renderPassBeginInfo.renderPass = glTFModel.offscreenPass.renderPass;
 			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
@@ -937,6 +964,7 @@ public:
 
 			//postprocess
 			renderPassBeginInfo.framebuffer = frameBuffers[i];
+			renderPassBeginInfo.renderPass = renderPass;
 			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
@@ -1108,14 +1136,14 @@ public:
 		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.roughnessMetallicTexture));
 
-		// Descriptor set layout for passing skin joint matrices
-		descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(&setLayoutBinding, 1);
-		setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.jointMatrices));
+		//// Descriptor set layout for passing skin joint matrices
+		//descriptorSetLayoutCI = vks::initializers::descriptorSetLayoutCreateInfo(&setLayoutBinding, 1);
+		//setLayoutBinding = vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0);
+		//VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCI, nullptr, &descriptorSetLayouts.jointMatrices));
 
 
 		// Pipeline layout using both descriptor sets (set 0 = matrices, set 1 = material)
-		std::array<VkDescriptorSetLayout, 7> setLayouts = 
+		std::array<VkDescriptorSetLayout, 6> setLayouts = 
 		{ 
 			descriptorSetLayouts.matrices, 
 			descriptorSetLayouts.textures, 
@@ -1123,7 +1151,7 @@ public:
 			descriptorSetLayouts.occlusionTextures,
 			descriptorSetLayouts.emissionTextures,
 			descriptorSetLayouts.roughnessMetallicTexture,
-			descriptorSetLayouts.jointMatrices 
+			//descriptorSetLayouts.jointMatrices  暂时用不到
 		};
 		VkPipelineLayoutCreateInfo pipelineLayoutCI= vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
 		// We will use push constants to push the local matrices of a primitive to the vertex shader
@@ -1160,14 +1188,14 @@ public:
 			vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
 		}
 
-		// Descriptor set for glTF model skin joint matrices
-		for (auto& skin : glTFModel.skins)
-		{
-			const VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.jointMatrices, 1);
-			VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &skin.descriptorSet));
-			VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(skin.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &skin.ssbo.descriptor);
-			vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
-		}
+		//// Descriptor set for glTF model skin joint matrices
+		//for (auto& skin : glTFModel.skins)
+		//{
+		//	const VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.jointMatrices, 1);
+		//	VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &skin.descriptorSet));
+		//	VkWriteDescriptorSet writeDescriptorSet = vks::initializers::writeDescriptorSet(skin.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &skin.ssbo.descriptor);
+		//	vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, nullptr);
+		//}
 
 		// PostProcess Descriptor Set
 		VkDescriptorSetAllocateInfo descriptorSetAllocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.postprocess, 1);
@@ -1241,7 +1269,7 @@ public:
 		};
 
 		rasterizationStateCI.cullMode = VK_CULL_MODE_BACK_BIT;
-		VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo(pipelineLayout, renderPass, 0);
+		VkGraphicsPipelineCreateInfo pipelineCI = vks::initializers::pipelineCreateInfo(pipelineLayout, glTFModel.offscreenPass.renderPass, 0);
 		pipelineCI.pVertexInputState = &vertexInputStateCI;
 		pipelineCI.pInputAssemblyState = &inputAssemblyStateCI;
 		pipelineCI.pRasterizationState = &rasterizationStateCI;
@@ -1265,7 +1293,7 @@ public:
 	}
 
 	// Offscreen frame buffer properties
-#define FB_COLOR_FORMAT VK_FORMAT_R8G8B8A8_UNORM
+#define FB_COLOR_FORMAT VK_FORMAT_B8G8R8A8_UNORM
 
 	// Setup the offscreen framebuffer for rendering the mirrored scene
 	// The color attachment of this framebuffer will then be sampled from
@@ -1342,7 +1370,7 @@ public:
 		attachments[1] = frameBuf.depth.view;
 
 		VkFramebufferCreateInfo fbufCreateInfo = vks::initializers::framebufferCreateInfo();
-		fbufCreateInfo.renderPass = renderPass;
+		fbufCreateInfo.renderPass = glTFModel.offscreenPass.renderPass;
 		fbufCreateInfo.attachmentCount = 2;
 		fbufCreateInfo.pAttachments = attachments;
 		fbufCreateInfo.width = width;
@@ -1368,67 +1396,67 @@ public:
 		VkBool32 validDepthFormat = vks::tools::getSupportedDepthFormat(physicalDevice, &fbDepthFormat);
 		assert(validDepthFormat);
 
-		//// Create a separate render pass for the offscreen rendering as it may differ from the one used for scene rendering
+		// Create a separate render pass for the offscreen rendering as it may differ from the one used for scene rendering
 
-		//std::array<VkAttachmentDescription, 2> attchmentDescriptions = {};
-		//// Color attachment
-		//attchmentDescriptions[0].format = FB_COLOR_FORMAT;
-		//attchmentDescriptions[0].samples = VK_SAMPLE_COUNT_1_BIT;
-		//attchmentDescriptions[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		//attchmentDescriptions[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		//attchmentDescriptions[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		//attchmentDescriptions[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		//attchmentDescriptions[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		//attchmentDescriptions[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		//// Depth attachment
-		//attchmentDescriptions[1].format = fbDepthFormat;
-		//attchmentDescriptions[1].samples = VK_SAMPLE_COUNT_1_BIT;
-		//attchmentDescriptions[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		//attchmentDescriptions[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		//attchmentDescriptions[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		//attchmentDescriptions[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		//attchmentDescriptions[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		//attchmentDescriptions[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		std::array<VkAttachmentDescription, 2> attchmentDescriptions = {};
+		// Color attachment
+		attchmentDescriptions[0].format = FB_COLOR_FORMAT;
+		attchmentDescriptions[0].samples = VK_SAMPLE_COUNT_1_BIT;
+		attchmentDescriptions[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		attchmentDescriptions[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attchmentDescriptions[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attchmentDescriptions[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attchmentDescriptions[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		attchmentDescriptions[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		// Depth attachment
+		attchmentDescriptions[1].format = fbDepthFormat;
+		attchmentDescriptions[1].samples = VK_SAMPLE_COUNT_1_BIT;
+		attchmentDescriptions[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		attchmentDescriptions[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attchmentDescriptions[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attchmentDescriptions[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attchmentDescriptions[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		attchmentDescriptions[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-		//VkAttachmentReference colorReference = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-		//VkAttachmentReference depthReference = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+		VkAttachmentReference colorReference = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+		VkAttachmentReference depthReference = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
 
-		//VkSubpassDescription subpassDescription = {};
-		//subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		//subpassDescription.colorAttachmentCount = 1;
-		//subpassDescription.pColorAttachments = &colorReference;
-		//subpassDescription.pDepthStencilAttachment = &depthReference;
+		VkSubpassDescription subpassDescription = {};
+		subpassDescription.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpassDescription.colorAttachmentCount = 1;
+		subpassDescription.pColorAttachments = &colorReference;
+		subpassDescription.pDepthStencilAttachment = &depthReference;
 
-		//// Use subpass dependencies for layout transitions
-		//std::array<VkSubpassDependency, 2> dependencies;
+		// Use subpass dependencies for layout transitions
+		std::array<VkSubpassDependency, 2> dependencies;
 
-		//dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-		//dependencies[0].dstSubpass = 0;
-		//dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		//dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		//dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		//dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		//dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[0].dstSubpass = 0;
+		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-		//dependencies[1].srcSubpass = 0;
-		//dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-		//dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		//dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		//dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		//dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-		//dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+		dependencies[1].srcSubpass = 0;
+		dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-		//// Create the actual renderpass
-		//VkRenderPassCreateInfo renderPassInfo = {};
-		//renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		//renderPassInfo.attachmentCount = static_cast<uint32_t>(attchmentDescriptions.size());
-		//renderPassInfo.pAttachments = attchmentDescriptions.data();
-		//renderPassInfo.subpassCount = 1;
-		//renderPassInfo.pSubpasses = &subpassDescription;
-		//renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
-		//renderPassInfo.pDependencies = dependencies.data();
+		// Create the actual renderpass
+		VkRenderPassCreateInfo renderPassInfo = {};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		renderPassInfo.attachmentCount = static_cast<uint32_t>(attchmentDescriptions.size());
+		renderPassInfo.pAttachments = attchmentDescriptions.data();
+		renderPassInfo.subpassCount = 1;
+		renderPassInfo.pSubpasses = &subpassDescription;
+		renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+		renderPassInfo.pDependencies = dependencies.data();
 
-		//VK_CHECK_RESULT(vkCreateRenderPass(device, &renderPassInfo, nullptr, &glTFModel.offscreenPass.renderPass));
+		VK_CHECK_RESULT(vkCreateRenderPass(device, &renderPassInfo, nullptr, &glTFModel.offscreenPass.renderPass));
 
 		// Create sampler to sample from the color attachments
 		VkSamplerCreateInfo sampler = vks::initializers::samplerCreateInfo();
@@ -1470,7 +1498,7 @@ public:
 	{
 		shaderData.values.projection = camera.matrices.perspective;
 		shaderData.values.model = camera.matrices.view;
-		shaderData.values.cameraPos = camera.position * -1.0f;
+		shaderData.values.cameraPos = camera.position;
 		memcpy(shaderData.buffer.mapped, &shaderData.values, sizeof(shaderData.values));
 	}
 

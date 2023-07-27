@@ -139,7 +139,7 @@ void main()
 //	}
 
 	//暂时没有ibl贴图，写个假的
-	vec3 ambient = vec3(occlusion * 0.2f);
+	vec3 ambient = vec3(occlusion * 0.05f);
 
 	//emission
 	vec3 emission = texture(samplerEmissionMap, inUV).rgb * 1.0f;

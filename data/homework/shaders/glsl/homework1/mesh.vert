@@ -16,9 +16,9 @@ layout (set = 0, binding = 0) uniform UBOScene
 	vec3 cameraPos;
 } uboScene;
 
-layout(std430, set = 7, binding = 0) readonly buffer JointMatrices {
-	mat4 jointMatrices[];
-};
+//layout(std430, set = 7, binding = 0) readonly buffer JointMatrices {
+//	mat4 jointMatrices[];
+//};
 
 layout(push_constant) uniform PushConsts {
 	mat4 model;
@@ -34,11 +34,11 @@ layout (location = 6) out vec3 outWorldPos;
 
 void main() 
 {
-	mat4 skinMat = 
-		inJointWeights.x * jointMatrices[int(inJointIndices.x)] +
-		inJointWeights.y * jointMatrices[int(inJointIndices.y)] +
-		inJointWeights.z * jointMatrices[int(inJointIndices.z)] +
-		inJointWeights.w * jointMatrices[int(inJointIndices.w)];
+//	mat4 skinMat = 
+//		inJointWeights.x * jointMatrices[int(inJointIndices.x)] +
+//		inJointWeights.y * jointMatrices[int(inJointIndices.y)] +
+//		inJointWeights.z * jointMatrices[int(inJointIndices.z)] +
+//		inJointWeights.w * jointMatrices[int(inJointIndices.w)];
 
 	mat3 timodel = mat3(transpose(inverse(primitive.model)));
 
